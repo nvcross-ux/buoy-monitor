@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gulf of Maine · Buoy Monitor</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    /* ── Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --navy:       #07111f;
+      --navy-mid:   #0d1e35;
+      --navy-light: #132641;
+      --border:     rgba(148,163,184,0.13);
+      --border-md:  rgba(148,163,184,0.22);
+      --text-1:     #f0f6ff;
+      --text-2:     #94a3b8;
+      --text-3:     #5a7090;
+      --accent:     #38bdf8;
+      --calm:       #4ade80;
+      --lwave:      #38bdf8;
+      --moderate:   #fbbf24;
+      --rough:      #f97316;
+      --storm:      #f87171;
+      --nodata:     #475569;
+      --sb-w:       284px;
+      --hdr-h:      58px;
+      --ease:       cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    html, body {
+      height: 100%; background: var(--navy);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden; color: var(--text-1);
+    }
+
+    /* ── Header ───────────────────────────────────────── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--hdr-h); z-index: 1001;
+      background: rgba(7,17,31,0.95);
+      backdrop-filter: blur(18px) saturate(160%);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 18px; gap: 12px;
+    }
+    .hdr-left { display: flex; align-items: center; gap: 10px; }
+    .hdr-icon { width: 30px; height: 30px; flex-shrink: 0; }
+    .hdr-title { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; }
+    .hdr-sub   { font-size: 9.5px; font-weight: 600; letter-spacing: 0.13em; color: var(--text-3); text-transform: uppercase; margin-top: 1px; }
+    .hdr-right { display: flex; align-items: center; gap: 9px; }
+
+    #status-pill {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--navy-mid); border: 1px solid var(--border);
+      border-radius: 20px; padding: 4px 11px;
+      font-size: 11px; color: var(--text-2); white-space: nowrap;
+    }
+    #status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--nodata); flex-shrink: 0; transition: background 0.4s;
+    }
+    #status-dot.live    { background: var(--calm); box-shadow: 0 0 6px var(--calm); animation: breathe 3s ease-in-out infinite; }
+    #status-dot.loading { background: var(--accent); animation: breathe 1s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .hdr-btn {
+      background: var(--navy-mid); border: 1px solid var(--border-md);
+      border-radius: 8px; color: var(--text-2); cursor: pointer;
+      width: 32px; height: 32px; font-size: 15px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .hdr-btn:hover { background: var(--navy-light); color: var(--text-1); }
+    #refresh-btn.spinning { animation: spin 0.75s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Sidebar ──────────────────────────────────────── */
+    #sidebar {
+      position: fixed; top: var(--hdr-h); bottom: 0; left: 0;
+      width: var(--sb-w); z-index: 950;
+      display: flex; flex-direction: column;
+      background: var(--navy-mid);
+      border-right: 1px solid var(--border);
+      transition: transform 0.26s var(--ease);
+    }
+    body.sb-closed #sidebar { transform: translateX(calc(-1 * var(--sb-w))); }
+
+    /* sidebar toggle tab */
+    #sb-tab {
+      position: absolute; top: 50%; right: -26px;
+      transform: translateY(-50%);
+      width: 26px; height: 52px;
+      background: var(--navy-mid);
+      border: 1px solid var(--border);
+      border-left: none;
+      border-radius: 0 8px 8px 0;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-3); font-size: 13px;
+      transition: color 0.15s, background 0.15s;
+      user-select: none;
+    }
+    #sb-tab:hover { background: var(--navy-light); color: var(--text-1); }
+
+    /* sidebar header */
+    #sb-hdr {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #sb-hdr-title { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; color: var(--text-3); text-transform: uppercase; }
+    #sb-hdr-sub   { font-size: 11.5px; color: var(--text-2); margin-top: 3px; }
+
+    /* sidebar legend strip */
+    #sb-legend {
+      display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      padding: 6px 14px 8px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .sb-leg-item { display: flex; align-items: center; gap: 4px; font-size: 9.5px; color: var(--text-3); white-space: nowrap; }
+    .sb-leg-dot  { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+    /* sidebar station list */
+    #sb-list { overflow-y: auto; flex: 1; padding: 6px 0; }
+    #sb-list::-webkit-scrollbar { width: 4px; }
+    #sb-list::-webkit-scrollbar-track { background: transparent; }
+    #sb-list::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 2px; }
+
+    /* station card */
+    .sb-card {
+      padding: 10px 14px 9px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.13s;
+      position: relative;
+    }
+    .sb-card:hover  { background: rgba(255,255,255,0.03); }
+    .sb-card.sb-active { background: rgba(56,189,248,0.07); }
+    .sb-card.sb-active::before {
+      content: '';
+      position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: var(--accent);
+      border-radius: 0 2px 2px 0;
+    }
+
+    /* card row 1: barb + meta + wave badge */
+    .sb-row1 {
+      display: flex; align-items: center; gap: 9px; margin-bottom: 5px;
+    }
+    .sb-barb-wrap { flex-shrink: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
+    .sb-meta { flex: 1; min-width: 0; }
+    .sb-stn-id   { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--accent); }
+    .sb-stn-name { font-size: 12.5px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sb-wh-badge {
+      flex-shrink: 0; font-size: 13px; font-weight: 700;
+      color: var(--nodata); min-width: 40px; text-align: right;
+      transition: color 0.3s;
+    }
+
+    /* card row 2: readings */
+    .sb-row2 { font-size: 11px; color: var(--text-3); display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+    .sb-readings { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; overflow: hidden; }
+    .sb-reading { white-space: nowrap; }
+    .sb-sep { color: var(--border-md); flex-shrink: 0; }
+    .sb-age { flex-shrink: 0; text-align: right; color: var(--text-3); }
+
+    /* ── Wind barb scale ─────────────────────────────── */
+    #sb-wind-scale {
+      padding: 8px 14px 11px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .sb-ws-title {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
+      color: var(--text-3); text-transform: uppercase; margin-bottom: 7px;
+    }
+    .sb-ws-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 3px 6px;
+    }
+    .sb-ws-item {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 10.5px; color: var(--text-2);
+    }
+    .sb-ws-barb { flex-shrink: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
+
+    /* ── Map ──────────────────────────────────────────── */
+    #map {
+      position: fixed; top: var(--hdr-h); bottom: 0;
+      left: var(--sb-w); right: 0;
+      transition: left 0.26s var(--ease);
+    }
+    body.sb-closed #map { left: 0; }
+
+    /* ── Wind barb map markers ─────────────────────────── */
+    .wb-icon { cursor: pointer; }
+
+    /* ── Leaflet popup overrides ──────────────────────── */
+    .leaflet-popup-content-wrapper {
+      background: rgba(7,17,31,0.97) !important;
+      border: 1px solid var(--border-md) !important;
+      border-radius: 14px !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.04) !important;
+      backdrop-filter: blur(24px) !important;
+    }
+    .leaflet-popup-content { margin: 0 !important; width: auto !important; }
+    .leaflet-popup-tip { background: rgba(7,17,31,0.97) !important; box-shadow: none !important; }
+    .leaflet-popup-close-button {
+      color: var(--text-3) !important; font-size: 20px !important;
+      top: 10px !important; right: 12px !important;
+      width: 24px !important; height: 24px !important;
+      display: flex !important; align-items: center !important; justify-content: center !important;
+      border-radius: 6px !important; transition: color 0.15s, background 0.15s !important;
+    }
+    .leaflet-popup-close-button:hover { color: var(--text-1) !important; background: var(--navy-light) !important; }
+
+    /* ── Popup card ───────────────────────────────────── */
+    .bp { min-width: 300px; max-width: 360px; }
+    .bp-header {
+      padding: 15px 18px 13px;
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: flex-start;
+    }
+    .bp-id   { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; }
+    .bp-name { font-size: 16px; font-weight: 600; color: var(--text-1); margin-top: 2px; }
+    .bp-time { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-3); white-space: nowrap; padding-top: 2px; }
+    .bp-tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--calm); box-shadow: 0 0 5px var(--calm); flex-shrink: 0; }
+    .bp-tdot.stale { background: var(--moderate); box-shadow: 0 0 5px var(--moderate); }
+    .bp-tdot.old   { background: var(--nodata); box-shadow: none; }
+
+    .bp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+    .bp-metric { background: var(--navy); padding: 13px 16px; display: flex; flex-direction: column; gap: 4px; }
+    .bpm-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-3); text-transform: uppercase; display: flex; align-items: center; gap: 5px; }
+    .bpm-icon  { font-size: 13px; line-height: 1; }
+    .bpm-val   { font-size: 22px; font-weight: 700; color: var(--text-1); letter-spacing: -0.01em; line-height: 1.1; }
+    .bpm-val.missing { font-size: 18px; color: var(--text-3); }
+    .bpm-sub   { font-size: 11px; color: var(--text-2); margin-top: 1px; }
+
+    .bp-footer {
+      padding: 10px 18px;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .bp-footer a { font-size: 11.5px; color: var(--accent); text-decoration: none; font-weight: 500; transition: opacity 0.15s; }
+    .bp-footer a:hover { opacity: 0.75; }
+    .bp-ts { font-size: 10.5px; color: var(--text-3); }
+
+    .bp-loading, .bp-offline { padding: 28px 20px; text-align: center; color: var(--text-3); font-size: 13px; }
+    .spinner { width: 22px; height: 22px; border: 2px solid var(--border-md); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 10px; }
+
+    /* ── Legend (map overlay) ─────────────────────────── */
+    #legend {
+      position: fixed; bottom: 28px; z-index: 1000;
+      left: calc(var(--sb-w) + 14px);
+      background: rgba(7,17,31,0.93); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 14px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      transition: left 0.26s var(--ease);
+    }
+    body.sb-closed #legend { left: 14px; }
+    .lg-title { font-size: 9px; font-weight: 700; letter-spacing: 0.12em; color: var(--text-3); text-transform: uppercase; margin-bottom: 8px; }
+    .lg-row   { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 11.5px; color: var(--text-2); }
+    .lg-dot   { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 5px currentColor; }
+
+    /* ── Leaflet controls ─────────────────────────────── */
+    .leaflet-bottom.leaflet-right { bottom: 14px; right: 14px; }
+    .leaflet-control-zoom a { background: rgba(7,17,31,0.9) !important; border-color: var(--border) !important; color: var(--text-2) !important; }
+    .leaflet-control-zoom a:hover { background: var(--navy-light) !important; color: var(--text-1) !important; }
+    .leaflet-control-attribution { background: rgba(7,17,31,0.75) !important; color: var(--text-3) !important; font-size: 9px !important; }
+    .leaflet-control-attribution a { color: var(--text-2) !important; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────── -->
+<header id="header">
+  <div class="hdr-left">
+    <svg class="hdr-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="16" cy="16" r="14.5" stroke="#38bdf8" stroke-width="1.4" opacity="0.3"/>
+      <circle cx="16" cy="16" r="5" fill="#38bdf8"/>
+      <path d="M16 4V11M16 21V28M4 16H11M21 16H28" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round" opacity="0.5"/>
+      <path d="M6 24 Q10 20 14 22 Q18 24 22 20 Q26 16 28 18" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round" fill="none" opacity="0.7"/>
+    </svg>
+    <div>
+      <div class="hdr-title">Gulf of Maine</div>
+      <div class="hdr-sub">NDBC Buoy Monitor</div>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <div id="status-pill">
+      <div id="status-dot"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+    <button class="hdr-btn" id="refresh-btn" title="Refresh all data (R)" onclick="refreshData()">↻</button>
+  </div>
+</header>
+
+<!-- ── Sidebar ─────────────────────────────────────────── -->
+<div id="sidebar">
+  <div id="sb-tab" onclick="toggleSidebar()" title="Toggle sidebar (S)">‹</div>
+
+  <div id="sb-hdr">
+    <div id="sb-hdr-title">STATIONS</div>
+    <div id="sb-hdr-sub">—</div>
+  </div>
+
+  <!-- Wave height color legend -->
+  <div id="sb-legend">
+    <div class="sb-leg-item"><div class="sb-leg-dot" style="background:var(--calm)"></div>Calm</div>
+    <div class="sb-leg-item"><div class="sb-leg-dot" style="background:var(--lwave)"></div>Light</div>
+    <div class="sb-leg-item"><div class="sb-leg-dot" style="background:var(--moderate)"></div>Moderate</div>
+    <div class="sb-leg-item"><div class="sb-leg-dot" style="background:var(--rough)"></div>Rough</div>
+    <div class="sb-leg-item"><div class="sb-leg-dot" style="background:var(--storm)"></div>Storm</div>
+  </div>
+
+  <!-- Wind barb scale -->
+  <div id="sb-wind-scale">
+    <div class="sb-ws-title">Wind Barb Scale (knots)</div>
+    <div class="sb-ws-grid" id="sb-ws-grid"><!-- injected by JS --></div>
+  </div>
+
+  <div id="sb-list"><!-- cards injected by JS --></div>
+</div>
+
+<!-- ── Map ────────────────────────────────────────────── -->
+<div id="map"></div>
+
+<!-- ── Map wave legend ────────────────────────────────── -->
+<div id="legend">
+  <div class="lg-title">Wave Height</div>
+  <div class="lg-row"><div class="lg-dot" style="color:var(--calm);background:var(--calm)"></div>Calm &lt;0.5 m</div>
+  <div class="lg-row"><div class="lg-dot" style="color:var(--lwave);background:var(--lwave)"></div>Light 0.5–1.5 m</div>
+  <div class="lg-row"><div class="lg-dot" style="color:var(--moderate);background:var(--moderate)"></div>Moderate 1.5–2.5 m</div>
+  <div class="lg-row"><div class="lg-dot" style="color:var(--rough);background:var(--rough)"></div>Rough 2.5–4 m</div>
+  <div class="lg-row"><div class="lg-dot" style="color:var(--storm);background:var(--storm)"></div>Storm &gt;4 m</div>
+  <div class="lg-row"><div class="lg-dot" style="background:var(--nodata)"></div>No data</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ═══════════════════════════════════════════════════════
+   State
+═══════════════════════════════════════════════════════ */
+let map;
+let stations = [];
+const stationData = new Map();  // id → data | null | undefined
+const markerMap   = new Map();  // id → { marker, popup }
+let activeSbId    = null;
+let lastRefresh   = null;
+let refreshTimer  = null;
+
+/* ═══════════════════════════════════════════════════════
+   Helpers
+═══════════════════════════════════════════════════════ */
+function waveColor(h) {
+  if (h == null) return '#475569';
+  if (h < 0.5)  return '#4ade80';
+  if (h < 1.5)  return '#38bdf8';
+  if (h < 2.5)  return '#fbbf24';
+  if (h < 4.0)  return '#f97316';
+  return '#f87171';
+}
+
+function toCardinal(deg) {
+  if (deg == null) return null;
+  const d = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return d[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+}
+
+function msToKts(ms) { return ms != null ? Math.round(ms * 1.94384) : null; }
+
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const m = Math.floor((Date.now() - new Date(iso)) / 60000);
+  if (m <  1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h/24)}d ago`;
+}
+
+function stalenessClass(iso) {
+  if (!iso) return 'old';
+  const m = (Date.now() - new Date(iso)) / 60000;
+  return m < 90 ? '' : m < 240 ? 'stale' : 'old';
+}
+
+function fmtTs(iso) {
+  if (!iso) return '';
+  return new Date(iso).toUTCString().replace('GMT','UTC').replace(/:\d\d UTC/,' UTC');
+}
+
+/* ═══════════════════════════════════════════════════════
+   Wind Barb SVG
+   windFromDeg = meteorological direction (FROM which wind blows)
+   windKts     = speed in knots
+   dotColor    = wave-height color for station dot
+   sz          = pixel size of the SVG square
+═══════════════════════════════════════════════════════ */
+function windBarbSvg(windFromDeg, windKts, dotColor, sz) {
+  const vb = 24;
+  // semi-transparent white lines, readable on ocean basemap
+  const C  = 'rgba(255,255,255,0.92)';
+
+  // No wind data at all → just a coloured station dot
+  if (windFromDeg == null || windKts == null) {
+    return `<svg width="${sz}" height="${sz}" viewBox="-${vb} -${vb} ${vb*2} ${vb*2}" xmlns="http://www.w3.org/2000/svg">
+      <circle r="5" fill="${dotColor}" stroke="rgba(255,255,255,0.7)" stroke-width="1.5"/>
+    </svg>`;
+  }
+
+  // Calm (< 3 kts): two concentric circles (standard WMO calm symbol)
+  if (windKts < 3) {
+    return `<svg width="${sz}" height="${sz}" viewBox="-${vb} -${vb} ${vb*2} ${vb*2}" xmlns="http://www.w3.org/2000/svg">
+      <circle r="5"  fill="none" stroke="${C}" stroke-width="1.5"/>
+      <circle r="10" fill="none" stroke="${C}" stroke-width="1.5"/>
+      <circle r="3"  fill="${dotColor}" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>
+    </svg>`;
+  }
+
+  // Staff + barbs
+  const STAFF = 20, BSP = 4.2, BL = 9;
+  const ANG   = 60 * Math.PI / 180;
+  const bx    = +(BL * Math.sin(ANG)).toFixed(2);
+  const by    = +(BL * Math.cos(ANG)).toFixed(2);
+
+  const parts = [
+    // Staff: base at origin (station location) → tip pointing in FROM direction
+    `<line x1="0" y1="0" x2="0" y2="${-STAFF}" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/>`,
+    // Station dot at base
+    `<circle r="3.5" fill="${dotColor}" stroke="rgba(255,255,255,0.75)" stroke-width="1"/>`,
+  ];
+
+  let rem = Math.round(windKts / 5) * 5;
+  let pos = -STAFF; // start barbs at the tip
+
+  // Pennants — 50 kts each (filled triangle)
+  while (rem >= 50) {
+    const tip2y = +(pos + by).toFixed(2);
+    const base  = +(pos + BSP * 2).toFixed(2);
+    parts.push(`<polygon points="0,${pos} ${bx},${tip2y} 0,${base}" fill="${C}"/>`);
+    pos += BSP * 2.2;
+    rem -= 50;
+  }
+
+  // Full barbs — 10 kts each
+  while (rem >= 10) {
+    parts.push(`<line x1="0" y1="${pos}" x2="${bx}" y2="${+(pos+by).toFixed(2)}" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/>`);
+    pos += BSP;
+    rem -= 10;
+  }
+
+  // Half barb — 5 kts (placed one step from tip if it's the only barb)
+  if (rem >= 5) {
+    if (pos === -STAFF) pos = -STAFF + BSP;
+    parts.push(`<line x1="0" y1="${pos}" x2="${+(bx*0.52).toFixed(2)}" y2="${+(pos+by*0.52).toFixed(2)}" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/>`);
+  }
+
+  return `<svg width="${sz}" height="${sz}" viewBox="-${vb} -${vb} ${vb*2} ${vb*2}" xmlns="http://www.w3.org/2000/svg">
+    <g transform="rotate(${windFromDeg})">${parts.join('')}</g>
+  </svg>`;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Popup HTML
+═══════════════════════════════════════════════════════ */
+function v(val, dec, unit) {
+  if (val == null) return '<span class="bpm-val missing">—</span>';
+  return `<span class="bpm-val">${val.toFixed(dec)}${unit}</span>`;
+}
+
+function windArrowSvg(deg) {
+  const rot = (deg + 180) % 360;
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"
+    style="transform:rotate(${rot}deg);display:inline-block;vertical-align:middle">
+    <path d="M12 2 L7 14 H10.5 V22 H13.5 V14 H17 Z"/>
+  </svg>`;
+}
+
+function createPopupHTML(station, data) {
+  if (data === undefined) {
+    return `<div class="bp"><div class="bp-header"><div>
+      <div class="bp-id">BUOY ${station.id}</div>
+      <div class="bp-name">${station.name}</div>
+    </div></div>
+    <div class="bp-loading"><div class="spinner"></div>Fetching live data…</div>
+    </div>`;
+  }
+  if (!data) {
+    return `<div class="bp"><div class="bp-header"><div>
+      <div class="bp-id">BUOY ${station.id}</div>
+      <div class="bp-name">${station.name}</div>
+    </div></div>
+    <div class="bp-offline">Station offline or data unavailable</div>
+    <div class="bp-footer">
+      <a href="https://www.ndbc.noaa.gov/station_page.php?station=${station.id}" target="_blank" rel="noopener">NDBC Station Page ↗</a>
+      <span class="bp-ts"></span>
+    </div></div>`;
+  }
+
+  const kts     = msToKts(data.windSpeed);
+  const gustKts = msToKts(data.gustSpeed);
+  const card    = toCardinal(data.windDir);
+  const sc      = stalenessClass(data.timestamp);
+
+  const windVal = kts == null
+    ? '<span class="bpm-val missing">—</span>'
+    : `<span class="bpm-val" style="display:flex;align-items:center;gap:5px">
+        ${data.windDir != null ? windArrowSvg(data.windDir) : ''}${kts} kts
+       </span>`;
+  const windSub = [card ? `From ${card}` : null, gustKts ? `Gusts ${gustKts} kts` : null]
+    .filter(Boolean).join(' · ');
+
+  return `<div class="bp">
+    <div class="bp-header">
+      <div>
+        <div class="bp-id">BUOY ${station.id}</div>
+        <div class="bp-name">${station.name}</div>
+      </div>
+      <div class="bp-time">
+        <div class="bp-tdot ${sc}"></div>
+        ${timeAgo(data.timestamp)}
+      </div>
+    </div>
+
+    <div class="bp-grid">
+      <div class="bp-metric">
+        <div class="bpm-label"><span class="bpm-icon" style="color:${waveColor(data.waveHeight)}">≋</span>WAVE HEIGHT</div>
+        ${v(data.waveHeight, 1, ' m')}
+        ${data.domPeriod != null ? `<div class="bpm-sub">Period ${data.domPeriod.toFixed(1)} s</div>` : ''}
+      </div>
+      <div class="bp-metric">
+        <div class="bpm-label"><span class="bpm-icon" style="color:#94a3b8">↑</span>WIND</div>
+        ${windVal}
+        ${windSub ? `<div class="bpm-sub">${windSub}</div>` : ''}
+      </div>
+      <div class="bp-metric">
+        <div class="bpm-label"><span class="bpm-icon" style="color:#60a5fa">〜</span>WATER TEMP</div>
+        ${v(data.waterTemp, 1, '°C')}
+        ${data.airTemp != null ? `<div class="bpm-sub">Air ${data.airTemp.toFixed(1)}°C</div>` : ''}
+      </div>
+      <div class="bp-metric">
+        <div class="bpm-label"><span class="bpm-icon" style="color:#a78bfa">◎</span>PRESSURE</div>
+        ${v(data.pressure, 1, ' hPa')}
+        ${data.dewPoint != null ? `<div class="bpm-sub">Dew ${data.dewPoint.toFixed(1)}°C</div>` : ''}
+      </div>
+    </div>
+
+    <div class="bp-footer">
+      <a href="https://www.ndbc.noaa.gov/station_page.php?station=${station.id}" target="_blank" rel="noopener">NDBC Station Page ↗</a>
+      <span class="bp-ts">${fmtTs(data.timestamp)}</span>
+    </div>
+  </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Map markers (wind barb divIcons)
+═══════════════════════════════════════════════════════ */
+const ICON_SZ = 52;
+const ICON_HL = ICON_SZ / 2;
+
+function buildMarkerIcon(data) {
+  const dotColor  = waveColor(data ? data.waveHeight : null);
+  const windDir   = data ? data.windDir : null;
+  const windKts   = data ? msToKts(data.windSpeed) : null;
+  const svg       = windBarbSvg(windDir, windKts, dotColor, ICON_SZ);
+  return L.divIcon({
+    html: `<div class="wb-icon">${svg}</div>`,
+    className: '',
+    iconSize:    [ICON_SZ, ICON_SZ],
+    iconAnchor:  [ICON_HL, ICON_HL],
+    popupAnchor: [0, -ICON_HL + 6],
+  });
+}
+
+function addMarker(station) {
+  const marker = L.marker([station.lat, station.lon], {
+    icon: buildMarkerIcon(undefined),
+    title: station.name,
+  }).addTo(map);
+
+  const popup = L.popup({
+    maxWidth: 380, minWidth: 300,
+    autoPanPaddingTopLeft:     L.point(ICON_SZ + 16, 76),
+    autoPanPaddingBottomRight: L.point(16, 16),
+  });
+  marker.bindPopup(popup);
+
+  marker.on('click', () => {
+    popup.setContent(createPopupHTML(station, stationData.get(station.id)));
+    marker.openPopup();
+    highlightSidebarCard(station.id);
+  });
+
+  markerMap.set(station.id, { marker, popup });
+}
+
+function refreshMarker(id, data) {
+  const entry = markerMap.get(id);
+  if (!entry) return;
+  entry.marker.setIcon(buildMarkerIcon(data));
+  if (entry.marker.isPopupOpen()) {
+    const s = stations.find(s => s.id === id);
+    entry.popup.setContent(createPopupHTML(s, data));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   Sidebar
+═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   Wind barb scale legend
+═══════════════════════════════════════════════════════ */
+function buildWindScale() {
+  const DOT = '#64748b';  // neutral slate dot for illustration
+  const entries = [
+    { kts: 0,   label: 'Calm'   },
+    { kts: 5,   label: '5 kts'  },
+    { kts: 10,  label: '10 kts' },
+    { kts: 15,  label: '15 kts' },
+    { kts: 20,  label: '20 kts' },
+    { kts: 25,  label: '25 kts' },
+    { kts: 50,  label: '50 kts' },
+    { kts: 65,  label: '65 kts' },
+  ];
+  document.getElementById('sb-ws-grid').innerHTML = entries.map(({ kts, label }) =>
+    `<div class="sb-ws-item">
+       <div class="sb-ws-barb">${windBarbSvg(0, kts, DOT, 32)}</div>
+       <span>${label}</span>
+     </div>`
+  ).join('');
+}
+
+function buildSidebarList() {
+  const list = document.getElementById('sb-list');
+  list.innerHTML = '';
+  stations.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'sb-card';
+    card.id = `sb-${s.id}`;
+    card.innerHTML = `
+      <div class="sb-row1">
+        <div class="sb-barb-wrap" id="sbw-${s.id}"></div>
+        <div class="sb-meta">
+          <div class="sb-stn-id">${s.id}</div>
+          <div class="sb-stn-name">${s.name}</div>
+        </div>
+        <div class="sb-wh-badge" id="sbh-${s.id}">—</div>
+      </div>
+      <div class="sb-row2" id="sbr-${s.id}">
+        <span class="sb-readings"><span class="sb-reading" style="color:var(--text-3)">Loading…</span></span>
+        <span class="sb-age">—</span>
+      </div>`;
+    card.addEventListener('click', () => flyToStation(s.id));
+    list.appendChild(card);
+    updateSidebarCard(s.id, undefined);
+  });
+}
+
+function updateSidebarCard(id, data) {
+  const bWrap = document.getElementById(`sbw-${id}`);
+  const bHdr  = document.getElementById(`sbh-${id}`);
+  const bRow2 = document.getElementById(`sbr-${id}`);
+  if (!bWrap) return;
+
+  if (data === undefined) {
+    // Loading state: empty barb, dash placeholders
+    bWrap.innerHTML = windBarbSvg(null, null, '#475569', 32);
+    bHdr.style.color = 'var(--nodata)'; bHdr.textContent = '—';
+    bRow2.innerHTML  = `<span class="sb-readings"><span class="sb-reading" style="color:var(--text-3)">Loading…</span></span><span class="sb-age">—</span>`;
+    return;
+  }
+
+  if (!data) {
+    bWrap.innerHTML = windBarbSvg(null, null, '#ef4444', 32);
+    bHdr.style.color = '#ef4444'; bHdr.textContent = '—';
+    bRow2.innerHTML  = `<span class="sb-readings"><span class="sb-reading" style="color:#ef4444">Offline</span></span><span class="sb-age">—</span>`;
+    return;
+  }
+
+  const dc  = waveColor(data.waveHeight);
+  const kts = msToKts(data.windSpeed);
+  const dir = toCardinal(data.windDir);
+
+  bWrap.innerHTML = windBarbSvg(data.windDir, kts, dc, 32);
+
+  bHdr.style.color = dc;
+  bHdr.textContent = data.waveHeight != null ? `${data.waveHeight.toFixed(1)}m` : '—';
+
+  const readings = [];
+  if (kts != null) readings.push(`${kts}kts${dir ? ' ' + dir : ''}`);
+  if (data.waterTemp != null) readings.push(`${data.waterTemp.toFixed(1)}°C`);
+  if (data.pressure  != null) readings.push(`${data.pressure.toFixed(0)}hPa`);
+
+  const rHtml = readings.map((r, i) =>
+    `<span class="sb-reading">${r}</span>${i < readings.length-1 ? '<span class="sb-sep">·</span>' : ''}`
+  ).join('');
+
+  bRow2.innerHTML = `
+    <span class="sb-readings">${rHtml || '<span style="color:var(--text-3)">No readings</span>'}</span>
+    <span class="sb-age">${timeAgo(data.timestamp)}</span>`;
+}
+
+function highlightSidebarCard(id) {
+  if (activeSbId) document.getElementById(`sb-${activeSbId}`)?.classList.remove('sb-active');
+  activeSbId = id;
+  const card = document.getElementById(`sb-${id}`);
+  if (card) {
+    card.classList.add('sb-active');
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+function flyToStation(id) {
+  highlightSidebarCard(id);
+  const station = stations.find(s => s.id === id);
+  const entry   = markerMap.get(id);
+  if (!station || !entry) return;
+  map.flyTo([station.lat, station.lon], Math.max(map.getZoom(), 8), { duration: 0.7 });
+  setTimeout(() => {
+    entry.popup.setContent(createPopupHTML(station, stationData.get(id)));
+    entry.marker.openPopup();
+  }, 800);
+}
+
+function toggleSidebar() {
+  const closed = document.body.classList.toggle('sb-closed');
+  document.getElementById('sb-tab').textContent = closed ? '›' : '‹';
+  setTimeout(() => map.invalidateSize(), 280);
+}
+
+/* ═══════════════════════════════════════════════════════
+   Status & stats
+═══════════════════════════════════════════════════════ */
+function setStatus(state, text) {
+  document.getElementById('status-dot').className  = state;
+  document.getElementById('status-text').textContent = text;
+}
+
+function updateSidebarHeader() {
+  const active = [...stationData.values()].filter(Boolean).length;
+  const total  = stations.length;
+  const ago    = lastRefresh ? timeAgo(lastRefresh.toISOString()) : '—';
+  document.getElementById('sb-hdr-sub').textContent =
+    `${active} of ${total} live · ${ago}`;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Data loading
+═══════════════════════════════════════════════════════ */
+async function loadAllData() {
+  if (!stations.length) return;
+  setStatus('loading', `Loading 0 / ${stations.length}…`);
+  document.getElementById('refresh-btn').classList.add('spinning');
+  let loaded = 0;
+
+  const promises = stations.map(async (s) => {
+    try {
+      const res  = await fetch(`/api/station/${s.id}/data`);
+      const data = res.ok ? await res.json() : null;
+      stationData.set(s.id, data);
+      refreshMarker(s.id, data);
+      updateSidebarCard(s.id, data);
+    } catch {
+      stationData.set(s.id, null);
+      refreshMarker(s.id, null);
+      updateSidebarCard(s.id, null);
+    } finally {
+      loaded++;
+      setStatus('loading', `Loading ${loaded} / ${stations.length}…`);
+    }
+  });
+
+  await Promise.allSettled(promises);
+
+  lastRefresh = new Date();
+  const active = [...stationData.values()].filter(Boolean).length;
+  setStatus('live', `${active} of ${stations.length} live`);
+  document.getElementById('refresh-btn').classList.remove('spinning');
+  updateSidebarHeader();
+
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(loadAllData, 30 * 60 * 1000);
+}
+
+async function refreshData() {
+  clearTimeout(refreshTimer);
+  await loadAllData();
+}
+
+/* ═══════════════════════════════════════════════════════
+   Map init
+═══════════════════════════════════════════════════════ */
+function initMap() {
+  map = L.map('map', { center: [43.0, -68.8], zoom: 7, zoomControl: false });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+  L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
+    { attribution: 'Map: &copy; Esri, GEBCO, NOAA | Data: <a href="https://www.ndbc.noaa.gov/" target="_blank">NDBC</a>', maxZoom: 13 }
+  ).addTo(map);
+
+  L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 13, opacity: 0.75 }
+  ).addTo(map);
+}
+
+/* ═══════════════════════════════════════════════════════
+   Bootstrap
+═══════════════════════════════════════════════════════ */
+(async function init() {
+  initMap();
+
+  const res = await fetch('/api/stations');
+  stations  = await res.json();
+
+  buildWindScale();
+  buildSidebarList();
+  stations.forEach(s => { stationData.set(s.id, undefined); addMarker(s); });
+  await loadAllData();
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 's' || e.key === 'S') toggleSidebar();
+    if (e.key === 'r' || e.key === 'R') refreshData();
+  });
+
+  // Re-fetch when returning to a stale tab
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && lastRefresh) {
+      if (Date.now() - lastRefresh.getTime() > 20 * 60 * 1000) refreshData();
+    }
+  });
+})();
+</script>
+</body>
+</html>
